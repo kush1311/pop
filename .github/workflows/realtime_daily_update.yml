@@ -1,0 +1,63 @@
+name: Daily PPO Update
+ 
+on:
+  schedule:
+    - cron: "30 10 * * 1-5"  # ⏰ Runs at 10:30 AM UTC = 4:00 PM IST (Mon–Fri)
+  workflow_dispatch:
+ 
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+ 
+    env:
+      NEWSDATA_API_KEY: ${{ secrets.NEWSDATA_API_KEY }}
+      FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+      GNEWS_API_KEY: ${{ secrets.GNEWS_API_KEY }}
+ 
+    steps:
+      - name: 📅 Checkout repo
+        uses: actions/checkout@v4
+ 
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+ 
+      - name: 📦 Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+ 
+      - name: 🚀 Run daily PPO update
+        run: |
+          python run_daily_update.py
+ 
+      - name: 📂 List output files
+        run: |
+          echo "--- Files in workspace ---"
+          ls -lh
+ 
+      - name: 📤 Upload OHLCV as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-ohlcv-data
+          path: live_nifty50_features.csv
+ 
+      - name: 📤 Upload Daily Summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-summary
+          path: daily_nifty50_summary.csv
+ 
+      - name: 📤 Upload Daily Report (Optional Backup)
+        uses: actions/upload-artifact@v4
+        with:
+          name: retraining-reports
+          path: daily_reports/*.csv
+      
+      - name: 📤 Upload Excel file (if updated)
+        uses: actions/upload-artifact@v4
+        with:
+          name: nifty50-processed-features
+          path: nifty50_processed_features.xlsx
+          if-no-files-found: ignore
