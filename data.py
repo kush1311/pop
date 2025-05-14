@@ -77,7 +77,7 @@ def calculate_features(df):
     df['SAR_Diff'] = df['Close'] - df['SAR']
     df['Rolling_ADX_5'] = df['ADX'].rolling(window=5).mean()
     df['Rolling_SAR_5'] = df['SAR_Diff'].rolling(window=5).mean()
-    df['Daily_Return'] = df['Close'].pct_change()
+    df['Daily_Return'] = df['Close'].pct_change(fill_method=None)
     df['Log_Return'] = np.log(df['Close'] / df['Close'].shift(1))
     df['Rolling_Mean_5'] = df['Close'].rolling(window=5).mean()
     df['Rolling_Std_5'] = df['Close'].rolling(window=5).std()
@@ -160,23 +160,33 @@ for sheet in sheet_names:
         print(f"  ❌ Error updating {sheet}: {e}")
  
 # Save back to the same Excel file
-if os.path.exists(excel_path):
-    # If file exists, first read it then create a new one
+try:
+    # Just use the simplest possible approach with pandas
+    print(f"Saving data to {excel_path}...")
+    
+    # Delete the file if it exists to avoid conflicts
+    if os.path.exists(excel_path):
+        os.remove(excel_path)
+        print(f"Removed existing Excel file for clean write")
+    
+    # Use pandas without any fancy parameters
+    with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
+        for sheet, df in updated_data.items():
+            print(f"Writing sheet: {sheet} with {len(df)} rows")
+            df.to_excel(writer, sheet_name=sheet, index=False)
+    
+    print(f"\n✅ All sheets updated in: {excel_path}")
+except Exception as e:
+    print(f"❌ Error writing Excel file: {e}")
+    # Try backup approach - save as CSV files instead
     try:
-        import openpyxl
-        book = openpyxl.load_workbook(excel_path)
-        # We'll create a new file, so no need to keep this open
-        book.close()
-    except Exception as e:
-        print(f"⚠️ Warning: Could not read existing Excel file: {e}")
-
-# Create a new writer (this will overwrite the file)
-with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
-    # Write all updated data
-    for sheet, df in updated_data.items():
-        df.to_excel(writer, sheet_name=sheet, index=False)
-
-print(f"\n✅ All sheets updated in: {excel_path}")
+        os.makedirs("excel_backup", exist_ok=True)
+        for sheet, df in updated_data.items():
+            csv_path = os.path.join("excel_backup", f"{sheet}.csv")
+            df.to_csv(csv_path, index=False)
+        print("✅ Saved data as CSV files in excel_backup/ folder as backup")
+    except Exception as csv_err:
+        print(f"❌ Even CSV backup failed: {csv_err}")
 
 # Main execution guard
 if __name__ == "__main__":
