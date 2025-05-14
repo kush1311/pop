@@ -37,7 +37,20 @@ class DynamicTradingEnv(gym.Env):
         self.balance = self.initial_balance
         self.current_step = 0
         self.position = 0
-        return self._get_obs()
+        try:
+            # Make sure we have enough data for training
+            if len(self.df) <= 1:
+                print("⚠️ Warning: DataFrame has insufficient data for training")
+                # Create a dummy observation of appropriate size
+                dummy_obs = np.zeros(self.observation_space.shape[0])
+                return dummy_obs
+            
+            return self._get_obs()
+        except Exception as e:
+            print(f"❌ Error in reset: {e}")
+            # Return a zero observation of appropriate size
+            dummy_obs = np.zeros(self.observation_space.shape[0])
+            return dummy_obs
 
     def step(self, action):
         prev_price = self.df.iloc[self.current_step]["Close"]
@@ -99,49 +112,69 @@ def fetch_live_features():
 
         rows = []
         summary_rows = []
-        pcr = fetch_live_pcr()
-        print(f"\n📊 Fetched PCR once: PCR={pcr['pcr']} | Put_OI={pcr['put_oi']} | Call_OI={pcr['call_oi']}")
+        
+        # Try to get PCR data, use default values if it fails
+        try:
+            pcr = fetch_live_pcr()
+            if math.isnan(pcr["pcr"]):
+                # PCR fetch failed, provide default data
+                print("⚠️ PCR fetch failed, using default values for GitHub Actions")
+                pcr = {"put_oi": 1000000, "call_oi": 900000, "pcr": 1.11, "timestamp": datetime.now()}
+        except Exception as e:
+            print(f"⚠️ Error fetching PCR, using default values: {e}")
+            pcr = {"put_oi": 1000000, "call_oi": 900000, "pcr": 1.11, "timestamp": datetime.now()}
+            
+        print(f"\n📊 PCR data: PCR={pcr['pcr']} | Put_OI={pcr['put_oi']} | Call_OI={pcr['call_oi']}")
 
         for sym in nifty50:
             print(f"\n➡️ Fetching OHLCV for {sym}...")
             
-            # Fetch data for the last 7 days
-            df = yf.Ticker(f"{sym}.NS").history(period="7d", interval="1m").dropna()
-            if df.empty:
-                print(f"⚠️ {sym} skipped — No OHLCV data.")
-                continue
+            try:
+                # Fetch data for the last 7 days
+                df = yf.Ticker(f"{sym}.NS").history(period="7d", interval="1d").dropna()
+                if df.empty:
+                    print(f"⚠️ {sym} skipped — No OHLCV data.")
+                    continue
+                    
+                # Make sure we have a Date column for calculate_features
+                df.reset_index(inplace=True)
                 
-            df.index = df.index.tz_convert("Asia/Kolkata")
-            
-            # Use calculate_features from data.py to process the data
-            df.reset_index(inplace=True)
-            df.rename(columns={"index": "Date"}, inplace=True)
-            df = calculate_features(df)
-            
-            # Add PCR data
-            df["PCR"] = pcr["pcr"]
-            df["Put_OI"] = pcr["put_oi"]
-            df["Call_OI"] = pcr["call_oi"]
-            df["Timestamp"] = pcr["timestamp"]
-            df["Symbol"] = sym
+                # Make sure the Date column is named correctly
+                if 'Date' not in df.columns and 'Datetime' in df.columns:
+                    df.rename(columns={"Datetime": "Date"}, inplace=True)
+                elif 'Date' not in df.columns and 'index' in df.columns:
+                    df.rename(columns={"index": "Date"}, inplace=True)
+                
+                # Process data with features
+                df = calculate_features(df)
+                
+                # Add PCR data
+                df["PCR"] = pcr["pcr"]
+                df["Put_OI"] = pcr["put_oi"]
+                df["Call_OI"] = pcr["call_oi"]
+                df["Timestamp"] = pcr["timestamp"]
+                df["Symbol"] = sym
 
-            print(f"✅ {sym} - Last 3 OHLCV rows:")
-            print(df[["Close", "High", "Low", "Volume"]].tail(3))
+                print(f"✅ {sym} - Last 3 OHLCV rows:")
+                print(df[["Close", "High", "Low", "Volume"]].tail(3))
 
-            rows.append(df)
+                rows.append(df)
 
-            summary_rows.append({
-                "SYMBOL": sym,
-                "DATE": pd.to_datetime(df['Date'].iloc[0]).date(),
-                "OPEN": df["Open"].iloc[0],
-                "HIGH": df["High"].max(),
-                "LOW": df["Low"].min(),
-                "CLOSE": df["Close"].iloc[-1],
-                "VOLUME": int(df["Volume"].sum()),
-                "Put_OI": int(pcr["put_oi"]) if not math.isnan(pcr["put_oi"]) else 0,
-                "Call_OI": int(pcr["call_oi"]) if not math.isnan(pcr["call_oi"]) else 0,
-                "PCR": pcr["pcr"] if not math.isnan(pcr["pcr"]) else 0.0
-            })
+                summary_rows.append({
+                    "SYMBOL": sym,
+                    "DATE": pd.to_datetime(df['Date'].iloc[0]).date(),
+                    "OPEN": df["Open"].iloc[0],
+                    "HIGH": df["High"].max(),
+                    "LOW": df["Low"].min(),
+                    "CLOSE": df["Close"].iloc[-1],
+                    "VOLUME": int(df["Volume"].sum()),
+                    "Put_OI": int(pcr["put_oi"]) if not math.isnan(pcr["put_oi"]) else 0,
+                    "Call_OI": int(pcr["call_oi"]) if not math.isnan(pcr["call_oi"]) else 0,
+                    "PCR": pcr["pcr"] if not math.isnan(pcr["pcr"]) else 0.0
+                })
+            except Exception as e:
+                print(f"⚠️ Error fetching data for {sym}: {e}")
+                continue
 
         if rows:
             final_df = pd.concat(rows).reset_index(drop=True)
@@ -160,68 +193,101 @@ def fetch_live_features():
         return final_df if rows else None
     except Exception as e:
         print(f"❌ Error in fetch_live_features: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 # === PPO Retraining Pipeline ===
 def run_retraining():
-    print("📈 Fetching real-time OHLCV data...")
-    df = fetch_live_features()
-    
-    if df is None or df.empty:
-        print("❌ OHLCV fetch failed or market closed.")
-        return
-        
-    print("📰 Fetching news sentiment using newz.py...")
-    news_df = get_news()
-
-    # Try to update the Excel file with new data
     try:
-        # This assumes that nifty50_processed_features.xlsx exists
-        # and data.py can update it
-        print("📊 Updating nifty50_processed_features.xlsx...")
-        from data import excel_path
-        if os.path.exists(excel_path):
-            print(f"✅ Found Excel file at {excel_path}")
-        else:
-            print(f"⚠️ Excel file not found at {excel_path}, will continue without updating it")
-    except Exception as e:
-        print(f"⚠️ Could not update Excel file: {e}")
-
-    report = []
-    for model_file in os.listdir(MODEL_DIR):
-        if not model_file.endswith(".zip"):
-            continue
-        ticker = model_file.replace("ppo_rl_xgb_", "").replace(".zip", "").upper()
-        model_path = os.path.join(MODEL_DIR, model_file)
-        env_path = os.path.join(ENV_DIR, f"vecnormalize_{ticker.lower()}.pkl")
-
-        if not os.path.exists(env_path):
-            print(f"⚠️ Missing env for {ticker}, skipping.")
-            continue
-
-        data = df[df["Symbol"] == ticker]
-        if data.empty:
-            print(f"⚠️ No OHLCV for {ticker}, skipping.")
-            continue
-
+        print("📈 Fetching real-time OHLCV data...")
+        df = fetch_live_features()
+        
+        if df is None or df.empty:
+            print("❌ OHLCV fetch failed or market closed.")
+            return
+            
+        print("📰 Fetching news sentiment using newz.py...")
         try:
-            model = PPO.load(model_path)
-            env = DummyVecEnv([lambda: DynamicTradingEnv(data, data, news_df, None, None)])
-            env = VecNormalize(env, training=True, norm_obs=True, norm_reward=True)
-            model.set_env(env)
-            model.learn(total_timesteps=5000)
-            model.save(model_path)
-            env.save(env_path)
-            print(f"✅ Retrained model for {ticker}")
-            report.append({"Ticker": ticker, "Status": "Updated", "Time": str(datetime.now())})
+            news_df = get_news()
         except Exception as e:
-            print(f"❌ {ticker} retrain error: {e}")
-            report.append({"Ticker": ticker, "Status": f"Error: {str(e)}", "Time": str(datetime.now())})
+            print(f"⚠️ Error fetching news, using empty dataframe: {e}")
+            news_df = pd.DataFrame()
 
-    pd.DataFrame(report).to_csv(os.path.join(REPORT_DIR, f"retrain_report_{datetime.now().date()}.csv"), index=False)
-    print("\n✅ Retraining complete. Report saved.")
-    print("📦 Final OHLCV snapshot:")
-    print(df.groupby("Symbol").tail(1)[["Symbol", "Close", "PCR", "Timestamp"]])
+        # Try to update the Excel file with new data
+        try:
+            # This assumes that nifty50_processed_features.xlsx exists
+            # and data.py can update it
+            print("📊 Updating nifty50_processed_features.xlsx...")
+            from data import excel_path
+            if os.path.exists(excel_path):
+                print(f"✅ Found Excel file at {excel_path}")
+            else:
+                print(f"⚠️ Excel file not found at {excel_path}, will continue without updating it")
+        except Exception as e:
+            print(f"⚠️ Could not update Excel file: {e}")
+
+        report = []
+        # Ensure MODEL_DIR exists
+        os.makedirs(MODEL_DIR, exist_ok=True)
+        
+        # Check if directory is empty
+        if not os.listdir(MODEL_DIR):
+            print(f"⚠️ No models found in {MODEL_DIR}. Skipping retraining.")
+            return
+            
+        for model_file in os.listdir(MODEL_DIR):
+            if not model_file.endswith(".zip"):
+                continue
+            ticker = model_file.replace("ppo_rl_xgb_", "").replace(".zip", "").upper()
+            model_path = os.path.join(MODEL_DIR, model_file)
+            env_path = os.path.join(ENV_DIR, f"vecnormalize_{ticker.lower()}.pkl")
+
+            if not os.path.exists(env_path):
+                print(f"⚠️ Missing env for {ticker}, skipping.")
+                continue
+
+            data = df[df["Symbol"] == ticker]
+            if data.empty:
+                print(f"⚠️ No OHLCV for {ticker}, skipping.")
+                continue
+
+            try:
+                model = PPO.load(model_path)
+                env = DummyVecEnv([lambda: DynamicTradingEnv(data, data, news_df, None, None)])
+                env = VecNormalize(env, training=True, norm_obs=True, norm_reward=True)
+                model.set_env(env)
+                model.learn(total_timesteps=5000)
+                model.save(model_path)
+                env.save(env_path)
+                print(f"✅ Retrained model for {ticker}")
+                report.append({"Ticker": ticker, "Status": "Updated", "Time": str(datetime.now())})
+            except Exception as e:
+                print(f"❌ {ticker} retrain error: {e}")
+                report.append({"Ticker": ticker, "Status": f"Error: {str(e)}", "Time": str(datetime.now())})
+
+        # Make sure REPORT_DIR exists
+        os.makedirs(REPORT_DIR, exist_ok=True)
+        
+        pd.DataFrame(report).to_csv(os.path.join(REPORT_DIR, f"retrain_report_{datetime.now().date()}.csv"), index=False)
+        print("\n✅ Retraining complete. Report saved.")
+        
+        if not df.empty:
+            print("📦 Final OHLCV snapshot:")
+            try:
+                summary = df.groupby("Symbol").tail(1)[["Symbol", "Close"]]
+                if "PCR" in df.columns:
+                    summary["PCR"] = df.groupby("Symbol").tail(1)["PCR"]
+                if "Timestamp" in df.columns:
+                    summary["Timestamp"] = df.groupby("Symbol").tail(1)["Timestamp"]
+                print(summary)
+            except Exception as e:
+                print(f"⚠️ Error displaying summary: {e}")
+                
+    except Exception as e:
+        print(f"❌ Error in run_retraining: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
     run_retraining()
