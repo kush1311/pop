@@ -27,6 +27,14 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+      
+      - name: 🔧 Create required directories
+        run: |
+          mkdir -p saved_models_with_xgb
+          mkdir -p saved_envs
+          mkdir -p daily_reports
+          mkdir -p daily_predictions
+          echo "Created required directories for model storage"
  
       - name: 🚀 Run daily PPO update
         run: |
