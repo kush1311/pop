@@ -107,9 +107,14 @@ jobs:
           path: nifty50_processed_features.xlsx
           if-no-files-found: ignore
           
-      - name: 📤 Upload Predictions
+      - name: 📤 Upload Predictions (Dated)
+        run: echo "DATE_TAG=$(date +'%Y%m%d')" >> $GITHUB_ENV
+      
+      - name: Upload with date
         uses: actions/upload-artifact@v4
         with:
-          name: daily-predictions
+          name: daily-predictions-${{ env.DATE_TAG }}
           path: daily_predictions/*.csv
           if-no-files-found: warn
+
+
