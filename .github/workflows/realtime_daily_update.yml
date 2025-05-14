@@ -17,6 +17,18 @@ jobs:
     steps:
       - name: 📅 Checkout repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history and tags
+          lfs: true       # Enable Git LFS to fetch large model files
+
+      - name: 📄 List repository contents to debug
+        run: |
+          echo "=== Listing base directory ==="
+          ls -la
+          echo "=== Checking saved_models_with_xgb directory ==="
+          ls -la saved_models_with_xgb || echo "Directory not found"
+          echo "=== Checking saved_envs directory ==="
+          ls -la saved_envs || echo "Directory not found"
  
       - name: 🐍 Set up Python
         uses: actions/setup-python@v4
@@ -27,6 +39,28 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+      
+      - name: 🔧 Create required directories
+        run: |
+          mkdir -p saved_models_with_xgb
+          mkdir -p saved_envs
+          mkdir -p daily_reports
+          mkdir -p daily_predictions
+          echo "Created required directories for model storage"
+          
+      - name: 📦 Copy model files if needed
+        run: |
+          if [ -d "$GITHUB_WORKSPACE/pop/saved_models_with_xgb" ]; then
+            echo "Copying models from pop/saved_models_with_xgb"
+            cp -r $GITHUB_WORKSPACE/pop/saved_models_with_xgb/* saved_models_with_xgb/
+          fi
+          
+          if [ -d "$GITHUB_WORKSPACE/saved_models_with_xgb" ]; then
+            echo "Listing found model files:"
+            ls -la saved_models_with_xgb/
+          else
+            echo "No model directory found after creation"
+          fi
  
       - name: 🚀 Run daily PPO update
         run: |
@@ -34,6 +68,11 @@ jobs:
  
       - name: 🔮 Generate predictions
         run: |
+          # First check if we have any models
+          echo "Model files available:"
+          ls -la saved_models_with_xgb/ || echo "No models directory found"
+          
+          # Run prediction script
           python generate_predictions.py
           echo "--- Generated prediction files ---"
           ls -lh daily_predictions/
