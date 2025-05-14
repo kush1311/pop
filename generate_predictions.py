@@ -22,7 +22,32 @@ from train_ppo_realtime_multi import DynamicTradingEnv, fetch_live_features, cal
 
 # Constants
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_DIR = os.path.join(BASE_DIR, "saved_models_with_xgb")
+
+# Check multiple potential model directories
+possible_model_dirs = [
+    os.path.join(BASE_DIR, "saved_models_with_xgb"),
+    os.path.join(BASE_DIR, "pop", "saved_models_with_xgb"),
+    os.path.join(BASE_DIR, "saved_models_with_xgb", "saved_models_with_xgb"),
+    os.path.join(os.environ.get("GITHUB_WORKSPACE", BASE_DIR), "saved_models_with_xgb")
+]
+
+# Find the first valid model directory
+MODEL_DIR = None
+for dir_path in possible_model_dirs:
+    if os.path.exists(dir_path):
+        if os.path.isdir(dir_path):
+            MODEL_DIR = dir_path
+            print(f"✅ Found model directory at: {MODEL_DIR}")
+            break
+        
+# If no model directory was found, use the default
+if MODEL_DIR is None:
+    MODEL_DIR = os.path.join(BASE_DIR, "saved_models_with_xgb")
+    print(f"⚠️ No model directory found. Using default: {MODEL_DIR}")
+    
+# Ensure MODEL_DIR exists
+os.makedirs(MODEL_DIR, exist_ok=True)
+
 ENV_DIR = os.path.join(BASE_DIR, "saved_envs")
 PREDICTIONS_DIR = os.path.join(BASE_DIR, "daily_predictions")
 os.makedirs(PREDICTIONS_DIR, exist_ok=True)
@@ -203,6 +228,32 @@ def run_all_predictions():
     if real_data is None or real_data.empty:
         print("❌ Failed to fetch market data")
         return None
+    
+    # Create environment directory if it doesn't exist
+    os.makedirs(ENV_DIR, exist_ok=True)
+    
+    # Check if we need to create environment files from the models
+    # This helps when we have models but no saved environments
+    model_files = [f for f in os.listdir(MODEL_DIR) if f.endswith('.zip')]
+    for model_file in model_files:
+        ticker = model_file.replace('ppo_rl_xgb_', '').replace('.zip', '').lower()
+        env_path = os.path.join(ENV_DIR, f"vecnormalize_{ticker}.pkl")
+        
+        if not os.path.exists(env_path):
+            print(f"⚠️ Creating environment file for {ticker}...")
+            try:
+                # Get data for this ticker
+                symbol = ticker.upper()
+                symbol_data = real_data[real_data['Symbol'] == symbol]
+                
+                if not symbol_data.empty and len(symbol_data) >= 5:
+                    # Create basic environment
+                    env = DummyVecEnv([lambda: DynamicTradingEnv(symbol_data, symbol_data, None, None, None)])
+                    env = VecNormalize(env, training=False, norm_obs=True, norm_reward=False)
+                    env.save(env_path)
+                    print(f"✅ Created environment file for {ticker}")
+            except Exception as e:
+                print(f"❌ Failed to create environment for {ticker}: {e}")
     
     # Get list of available models
     model_files = [f for f in os.listdir(MODEL_DIR) if f.endswith('.zip')]
