@@ -4,6 +4,7 @@ Daily update script for PPO RL trading model
 This script:
 1. Updates the Nifty50 data using data.py
 2. Runs the PPO retraining using train_ppo_realtime_multi.py
+3. Generates predictions for next 3 months using generate_predictions.py
 """
 
 import os
@@ -28,6 +29,20 @@ def run_update():
         from train_ppo_realtime_multi import run_retraining
         run_retraining()
         print("✅ Model retraining complete")
+        
+        # Step 3: Generate predictions
+        print("\n🔄 STEP 3: Generating predictions for next 3 months")
+        try:
+            from generate_predictions import run_all_predictions
+            predictions = run_all_predictions()
+            if predictions is not None:
+                print(f"✅ Successfully generated predictions for {predictions['Symbol'].nunique()} stocks")
+            else:
+                print("⚠️ No predictions were generated")
+        except Exception as e:
+            print(f"\n❌ ERROR during predictions: {str(e)}")
+            traceback.print_exc()
+            print("⚠️ Continuing with the rest of the process despite prediction error")
         
         elapsed_time = time.time() - start_time
         print(f"\n✅ DAILY UPDATE COMPLETED in {elapsed_time:.2f} seconds")

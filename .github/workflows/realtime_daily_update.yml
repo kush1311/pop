@@ -32,6 +32,12 @@ jobs:
         run: |
           python run_daily_update.py
  
+      - name: 🔮 Generate predictions
+        run: |
+          python generate_predictions.py
+          echo "--- Generated prediction files ---"
+          ls -lh daily_predictions/
+ 
       - name: 📂 List output files
         run: |
           echo "--- Files in workspace ---"
@@ -61,3 +67,10 @@ jobs:
           name: nifty50-processed-features
           path: nifty50_processed_features.xlsx
           if-no-files-found: ignore
+          
+      - name: 📤 Upload Predictions
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-predictions
+          path: daily_predictions/*.csv
+          if-no-files-found: warn
