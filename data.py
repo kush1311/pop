@@ -160,19 +160,22 @@ for sheet in sheet_names:
         print(f"  ❌ Error updating {sheet}: {e}")
  
 # Save back to the same Excel file
-with pd.ExcelWriter(excel_path, engine='openpyxl', mode='a' if os.path.exists(excel_path) else 'w') as writer:
-    # If file exists, remove all existing sheets to avoid duplicates
-    if os.path.exists(excel_path) and 'a' in writer.mode:
-        # Get the workbook
-        book = writer.book
-        # Remove all sheets
-        for sheet_name in book.sheetnames:
-            del book[sheet_name]
-    
-    # Now write all updated data
+if os.path.exists(excel_path):
+    # If file exists, first read it then create a new one
+    try:
+        import openpyxl
+        book = openpyxl.load_workbook(excel_path)
+        # We'll create a new file, so no need to keep this open
+        book.close()
+    except Exception as e:
+        print(f"⚠️ Warning: Could not read existing Excel file: {e}")
+
+# Create a new writer (this will overwrite the file)
+with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
+    # Write all updated data
     for sheet, df in updated_data.items():
         df.to_excel(writer, sheet_name=sheet, index=False)
- 
+
 print(f"\n✅ All sheets updated in: {excel_path}")
 
 # Main execution guard
