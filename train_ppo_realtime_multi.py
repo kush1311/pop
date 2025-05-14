@@ -94,12 +94,67 @@ def fetch_live_pcr(symbol="NIFTY"):
             pass
         return {"put_oi": np.nan, "call_oi": np.nan, "pcr": np.nan, "timestamp": datetime.now()}
 
+# === Simple Feature Calculation for GitHub Actions ===
+def calculate_features_simple(df):
+    """
+    A simplified version of feature calculation for GitHub Actions environment
+    that's more robust with smaller datasets
+    """
+    df = df.copy()
+    
+    # Make sure date is properly formatted
+    if 'Date' in df.columns:
+        df['Date'] = pd.to_datetime(df['Date'])
+    
+    # Basic features that don't require a lot of history
+    df['EMA5'] = df['Close'].ewm(span=5).mean()
+    df['SMA10'] = df['Close'].rolling(window=min(5, len(df) - 1)).mean()
+    
+    # Daily returns - handle small datasets
+    if len(df) > 1:
+        df['Daily_Return'] = df['Close'].pct_change(fill_method=None)
+    else:
+        df['Daily_Return'] = 0
+        
+    # Volatility - use smaller window for small datasets
+    window_size = min(5, max(2, len(df) - 1))
+    if len(df) > 1:
+        df['Volatility'] = df['Close'].rolling(window=window_size).std()
+    else:
+        df['Volatility'] = 0
+        
+    # RSI calculation with small dataset handling
+    if len(df) > 1:
+        delta = df['Close'].diff()
+        gain = delta.where(delta > 0, 0)
+        loss = -delta.where(delta < 0, 0)
+        avg_gain = gain.rolling(window=min(14, len(df) - 1)).mean()
+        avg_loss = loss.rolling(window=min(14, len(df) - 1)).mean()
+        
+        # Handle division by zero
+        rs = avg_gain / avg_loss.replace(0, 0.001)
+        df['RSI'] = 100 - (100 / (1 + rs))
+    else:
+        df['RSI'] = 50  # Neutral RSI for single records
+    
+    # Fill NaN values
+    df = df.fillna(0)
+    
+    return df
+
 # === Fetch All Nifty50 Features - Now using data.py ===
 def fetch_live_features():
     try:
         # Importing os if not already imported
         import os
-        from data import calculate_features
+        try:
+            from data import calculate_features
+            print("Using full feature calculation from data.py")
+        except Exception as e:
+            print(f"⚠️ Error importing calculate_features from data.py: {e}")
+            print("Will use simplified feature calculation")
+            calculate_features = calculate_features_simple
+            
         import yfinance as yf
 
         nifty50 = [
@@ -130,12 +185,14 @@ def fetch_live_features():
             print(f"\n➡️ Fetching OHLCV for {sym}...")
             
             try:
-                # Fetch data for the last 7 days
-                df = yf.Ticker(f"{sym}.NS").history(period="7d", interval="1d").dropna()
+                # Fetch data for the last 30 days to ensure enough data
+                df = yf.Ticker(f"{sym}.NS").history(period="30d", interval="1d").dropna()
                 if df.empty:
                     print(f"⚠️ {sym} skipped — No OHLCV data.")
                     continue
                     
+                print(f"✅ Downloaded {len(df)} days of data for {sym}")
+                
                 # Make sure we have a Date column for calculate_features
                 df.reset_index(inplace=True)
                 
@@ -145,8 +202,17 @@ def fetch_live_features():
                 elif 'Date' not in df.columns and 'index' in df.columns:
                     df.rename(columns={"index": "Date"}, inplace=True)
                 
+                # Check if we have enough data
+                if len(df) < 2:
+                    print(f"⚠️ Not enough data for {sym}, need at least 2 days.")
+                    continue
+                
                 # Process data with features
-                df = calculate_features(df)
+                try:
+                    df = calculate_features(df)
+                except Exception as e:
+                    print(f"⚠️ Error calculating features, using simplified calculation: {e}")
+                    df = calculate_features_simple(df)
                 
                 # Add PCR data
                 df["PCR"] = pcr["pcr"]
@@ -155,19 +221,20 @@ def fetch_live_features():
                 df["Timestamp"] = pcr["timestamp"]
                 df["Symbol"] = sym
 
-                print(f"✅ {sym} - Last 3 OHLCV rows:")
-                print(df[["Close", "High", "Low", "Volume"]].tail(3))
+                print(f"✅ {sym} data processed successfully. Shape: {df.shape}")
+                if len(df) > 3:
+                    print(df[["Date", "Close", "High", "Low", "Volume"]].tail(3))
 
                 rows.append(df)
 
                 summary_rows.append({
                     "SYMBOL": sym,
-                    "DATE": pd.to_datetime(df['Date'].iloc[0]).date(),
-                    "OPEN": df["Open"].iloc[0],
-                    "HIGH": df["High"].max(),
-                    "LOW": df["Low"].min(),
-                    "CLOSE": df["Close"].iloc[-1],
-                    "VOLUME": int(df["Volume"].sum()),
+                    "DATE": pd.to_datetime(df['Date'].iloc[0]).date() if len(df) > 0 else datetime.now().date(),
+                    "OPEN": df["Open"].iloc[0] if len(df) > 0 else 0,
+                    "HIGH": df["High"].max() if len(df) > 0 else 0,
+                    "LOW": df["Low"].min() if len(df) > 0 else 0,
+                    "CLOSE": df["Close"].iloc[-1] if len(df) > 0 else 0,
+                    "VOLUME": int(df["Volume"].sum()) if len(df) > 0 else 0,
                     "Put_OI": int(pcr["put_oi"]) if not math.isnan(pcr["put_oi"]) else 0,
                     "Call_OI": int(pcr["call_oi"]) if not math.isnan(pcr["call_oi"]) else 0,
                     "PCR": pcr["pcr"] if not math.isnan(pcr["pcr"]) else 0.0
