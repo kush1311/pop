@@ -28,14 +28,26 @@ PREDICTIONS_DIR = os.path.join(BASE_DIR, "daily_predictions")
 os.makedirs(PREDICTIONS_DIR, exist_ok=True)
 FORECAST_DAYS = 90  # 3 months prediction
 
-def prepare_forecast_data(df, days=90):
-    """Prepare data for forecasting by extending the dataframe with future dates"""
+def prepare_forecast_data(df, days=90, lookback_days=20):
+    """
+    Prepare data for forecasting by extending the dataframe with future dates
+    Uses the last lookback_days to create patterns for decision making
+    """
     if df.empty:
         print("⚠️ Empty dataframe, cannot prepare forecast data")
         return None
         
     # Get the latest date in the dataframe
     latest_date = pd.to_datetime(df['Date']).max()
+    
+    # Ensure we have enough historical data (at least lookback_days)
+    if len(df) < lookback_days:
+        print(f"⚠️ Not enough historical data, need at least {lookback_days} days")
+        # If we don't have enough data, use what we have
+        lookback_days = len(df)
+        
+    # Get the last lookback_days of data to use as pattern
+    historical_window = df.iloc[-lookback_days:].copy()
     
     # Create a dataframe with future dates
     future_dates = [latest_date + timedelta(days=i+1) for i in range(days)]
@@ -49,11 +61,42 @@ def prepare_forecast_data(df, days=90):
         print("⚠️ No Symbol column found in dataframe")
         future_df['Symbol'] = 'UNKNOWN'
     
-    # Add placeholder data - we'll use the last known values
-    last_row = df.iloc[-1].copy()
+    # Add features based on historical patterns
+    # For price data, we'll use a simple model that continues the recent trend
+    if len(historical_window) >= 2:
+        # Calculate average daily change over the lookback period
+        avg_daily_change = (historical_window['Close'].iloc[-1] - historical_window['Close'].iloc[0]) / (len(historical_window) - 1)
+        
+        # Initialize with the last known price
+        last_price = historical_window['Close'].iloc[-1]
+        
+        # Generate future prices
+        future_prices = []
+        for i in range(days):
+            # Add some randomness based on historical volatility
+            volatility = historical_window['Close'].pct_change().std()
+            noise = np.random.normal(0, volatility * last_price) if not pd.isna(volatility) else 0
+            
+            # Calculate new price
+            new_price = last_price + avg_daily_change + noise
+            future_prices.append(max(0.1, new_price))  # Ensure price doesn't go negative
+            last_price = new_price
+    else:
+        # Not enough data for trend, just use last price
+        future_prices = [df['Close'].iloc[-1]] * days
+    
+    # Add the forecasted prices
+    future_df['Close'] = future_prices
+    
+    # Generate other price columns based on the Close price
+    future_df['Open'] = future_df['Close'] * (1 + np.random.normal(0, 0.005, size=days))
+    future_df['High'] = future_df['Close'] * (1 + abs(np.random.normal(0, 0.01, size=days)))
+    future_df['Low'] = future_df['Close'] * (1 - abs(np.random.normal(0, 0.01, size=days)))
+    
+    # Copy over other indicators from historical data
     for col in df.columns:
-        if col not in ['Date', 'Symbol']:
-            future_df[col] = last_row[col]
+        if col not in ['Date', 'Symbol', 'Open', 'High', 'Low', 'Close', 'Volume']:
+            future_df[col] = historical_window[col].iloc[-1]
     
     # Ensure Date is datetime type
     future_df['Date'] = pd.to_datetime(future_df['Date'])
@@ -79,9 +122,16 @@ def predict_stock(symbol, real_data, models_dir=MODEL_DIR, env_dir=ENV_DIR):
         if stock_data.empty:
             print(f"⚠️ No data found for {symbol}")
             return None
+        
+        # Check if we have enough data for meaningful predictions
+        if len(stock_data) < 5:  # At least 5 days of data
+            print(f"⚠️ Not enough historical data for {symbol}, need at least 5 days")
+            return None
             
-        # Prepare forecast data
-        future_data = prepare_forecast_data(stock_data, days=FORECAST_DAYS)
+        print(f"📊 Using last {len(stock_data)} days of data for {symbol} to predict next {FORECAST_DAYS} days")
+            
+        # Prepare forecast data with 20-day lookback pattern
+        future_data = prepare_forecast_data(stock_data, days=FORECAST_DAYS, lookback_days=20)
         if future_data is None:
             print(f"⚠️ Failed to create forecast data for {symbol}")
             return None
@@ -114,7 +164,8 @@ def predict_stock(symbol, real_data, models_dir=MODEL_DIR, env_dir=ENV_DIR):
                 'Predicted_Action': position_name,
                 'Position': position,
                 'Action_Code': int(action),
-                'Close': future_data['Close'].iloc[day]
+                'Close': future_data['Close'].iloc[day],
+                'Forecasted_Price': round(future_data['Close'].iloc[day], 2)
             })
             
             if done:
