@@ -12,7 +12,7 @@ import time
 import numpy as np
 import pandas as pd
 import datetime
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
@@ -207,7 +207,7 @@ def predict_stock(symbol, real_data, models_dir=MODEL_DIR, env_dir=ENV_DIR):
         traceback.print_exc()
         return None
 
-def run_all_predictions():
+def run_all_predictions(force_regenerate=True):
     """Generate predictions for all stocks"""
     print(f"\n{'='*80}\n📈 GENERATING PREDICTIONS FOR NEXT {FORECAST_DAYS} DAYS\n{'='*80}")
     
@@ -216,10 +216,14 @@ def run_all_predictions():
     output_file = os.path.join(PREDICTIONS_DIR, f"predictions_{today}.csv")
     
     # Check if predictions were already generated today
-    if os.path.exists(output_file):
+    if os.path.exists(output_file) and not force_regenerate:
         print(f"⚠️ Predictions for today already exist at {output_file}")
         print("📊 Loading existing predictions...")
         return pd.read_csv(output_file)
+    else:
+        if os.path.exists(output_file):
+            print(f"🔄 Regenerating predictions for today (replacing existing file)")
+            # We won't try to delete the file as it might be in use
     
     # Fetch latest data
     print("📊 Fetching latest market data...")
@@ -310,16 +314,31 @@ def run_all_predictions():
         # Generate a simple prediction output for demonstration
         print("📊 Creating a demonstration prediction file without models...")
         
-        # Get sample data from real_data
-        sample_symbols = real_data['Symbol'].unique()[:5] if real_data is not None and not real_data.empty else ["SAMPLE1", "SAMPLE2"]
+        # Get all symbols from real_data instead of just a sample
+        all_symbols = real_data['Symbol'].unique() if real_data is not None and not real_data.empty else ["SAMPLE1", "SAMPLE2"]
+        print(f"📈 Will generate predictions for {len(all_symbols)} stocks")
         
         # Create demonstration predictions
         demo_predictions = []
-        for symbol in sample_symbols:
+        for symbol in all_symbols:
+            # For each stock, create predictions for the next FORECAST_DAYS days
             for day in range(FORECAST_DAYS):
                 action = np.random.choice([0, 1, 2])  # Random action
                 position_name = "BUY" if action == 2 else "SELL" if action == 0 else "HOLD"
-                price = 1000 + np.random.normal(0, 10)  # Random price
+                
+                # Get the last known price for this symbol if available
+                last_price = None
+                if real_data is not None and not real_data.empty:
+                    symbol_data = real_data[real_data['Symbol'] == symbol]
+                    if not symbol_data.empty and 'Close' in symbol_data.columns:
+                        last_price = symbol_data['Close'].iloc[-1]
+                
+                # Use last price if available, otherwise generate random price
+                if last_price:
+                    # Add some random variation to simulate future price
+                    price = last_price * (1 + np.random.normal(0, 0.02))  # 2% daily volatility
+                else:
+                    price = 1000 + np.random.normal(0, 10)  # Random price
                 
                 demo_predictions.append({
                     'Date': date.today() + timedelta(days=day),
@@ -333,8 +352,17 @@ def run_all_predictions():
         
         # Create demo dataframe
         combined_predictions = pd.DataFrame(demo_predictions)
-        combined_predictions.to_csv(output_file, index=False)
-        print(f"✅ Created demonstration predictions file with {len(combined_predictions)} rows")
+        
+        # In case the file is in use, write to a new file with timestamp
+        try:
+            combined_predictions.to_csv(output_file, index=False)
+            print(f"✅ Created predictions file with {len(combined_predictions)} rows")
+        except Exception as e:
+            # If we can't write to the file, create a new one with a timestamp
+            timestamp = datetime.now().strftime('%H%M%S')
+            new_output_file = os.path.join(PREDICTIONS_DIR, f"predictions_{today}_{timestamp}.csv")
+            combined_predictions.to_csv(new_output_file, index=False)
+            print(f"✅ Created predictions file at {new_output_file} with {len(combined_predictions)} rows")
         
         return combined_predictions
     
@@ -373,23 +401,65 @@ def run_all_predictions():
     
     print("\n💼 Stock Recommendations (range: -1 to +1):")
     for stock, score in recommendations.items():
-        recommendation = "Strong Buy" if score > 0.5 else "Buy" if score > 0 else "Sell" if score > -0.5 else "Strong Sell"
+        recommendation = "Strong Buy" if score > 0.5 else "Buy" if score > 0 else "Hold" if score == 0 else "Sell" if score > -0.5 else "Strong Sell"
         print(f"{stock}: {score:.2f} - {recommendation}")
     
-    # Create a summary file with recommendations
+    # Create a more detailed summary file with recommendations
     summary_file = os.path.join(PREDICTIONS_DIR, f"recommendations_{today}.csv")
-    pd.DataFrame({
-        'Symbol': recommendations.index,
-        'Score': recommendations.values,
-        'Recommendation': ['Strong Buy' if s > 0.5 else 'Buy' if s > 0 else 'Sell' if s > -0.5 else 'Strong Sell' for s in recommendations.values]
-    }).to_csv(summary_file, index=False)
-    print(f"\n✅ Saved recommendations to {summary_file}")
+    
+    # Calculate more detailed metrics
+    detailed_recommendations = []
+    for symbol in combined_predictions['Symbol'].unique():
+        symbol_data = combined_predictions[combined_predictions['Symbol'] == symbol]
+        
+        # Count actions
+        buy_count = sum(symbol_data['Predicted_Action'] == 'BUY')
+        sell_count = sum(symbol_data['Predicted_Action'] == 'SELL')
+        hold_count = sum(symbol_data['Predicted_Action'] == 'HOLD')
+        
+        # Calculate score
+        score = symbol_data['Position'].sum() / len(symbol_data)
+        
+        # Determine recommendation
+        recommendation = "Strong Buy" if score > 0.5 else "Buy" if score > 0 else "Hold" if score == 0 else "Sell" if score > -0.5 else "Strong Sell"
+        
+        # Calculate short, medium, long term signals
+        if len(symbol_data) >= 90:
+            short_term = symbol_data.iloc[:30]['Position'].sum() / 30
+            medium_term = symbol_data.iloc[30:60]['Position'].sum() / 30
+            long_term = symbol_data.iloc[60:90]['Position'].sum() / 30
+        else:
+            # Handle cases with less than 90 days of predictions
+            third = len(symbol_data) // 3
+            short_term = symbol_data.iloc[:third]['Position'].sum() / third if third > 0 else 0
+            medium_term = symbol_data.iloc[third:2*third]['Position'].sum() / third if third > 0 else 0
+            long_term = symbol_data.iloc[2*third:]['Position'].sum() / (len(symbol_data) - 2*third) if (len(symbol_data) - 2*third) > 0 else 0
+        
+        # Store all data
+        detailed_recommendations.append({
+            'Symbol': symbol,
+            'Buy_Count': buy_count,
+            'Sell_Count': sell_count,
+            'Hold_Count': hold_count,
+            'Overall_Score': score,
+            'Short_Term_Score': short_term,  # First 30 days
+            'Medium_Term_Score': medium_term,  # Next 30 days
+            'Long_Term_Score': long_term,  # Last 30 days
+            'Recommendation': recommendation,
+            'Short_Term_Signal': "Buy" if short_term > 0 else "Hold" if short_term == 0 else "Sell",
+            'Medium_Term_Signal': "Buy" if medium_term > 0 else "Hold" if medium_term == 0 else "Sell",
+            'Long_Term_Signal': "Buy" if long_term > 0 else "Hold" if long_term == 0 else "Sell"
+        })
+    
+    # Convert to DataFrame and save
+    pd.DataFrame(detailed_recommendations).to_csv(summary_file, index=False)
+    print(f"\n✅ Saved detailed recommendations to {summary_file}")
     
     return combined_predictions
 
 if __name__ == "__main__":
     start_time = time.time()
-    predictions = run_all_predictions()
+    predictions = run_all_predictions(force_regenerate=True)
     elapsed_time = time.time() - start_time
     print(f"\n✅ PREDICTIONS COMPLETED in {elapsed_time:.2f} seconds")
     
