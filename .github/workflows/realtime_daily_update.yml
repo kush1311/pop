@@ -166,8 +166,32 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          git add *.csv daily_predictions/*.csv daily_reports/*.csv || echo "Nothing to add"
-          git commit -m "🔄 Auto-update CSV reports from workflow" || echo "No changes to commit"
+          # Stage everything that's been updated
+          echo "Staging CSV files..."
+          git add *.csv daily_predictions/*.csv daily_reports/*.csv daily_reports/**/*.csv || echo "No CSV files to add"
           
-          git remote set-url origin https://x-access-token:${{ secrets.Stock }}@github.com/${{ github.repository }}
-          git push origin HEAD:${{ github.ref_name }}
+          echo "Staging models and environments..."
+          git add saved_models_with_xgb/*.zip saved_envs/*.pkl || echo "No models or environments to add"
+          
+          echo "Staging news data..."
+          git add Labeled_News_Sentiment_Data.csv || echo "No news data to add"
+          
+          echo "Staging visualizations..."
+          git add daily_reports/*.png daily_reports/**/*.png || echo "No visualizations to add"
+          
+          echo "Staging markdown reports..."
+          git add daily_reports/*.md daily_reports/**/*.md || echo "No reports to add"
+          
+          # Check if there are changes to commit
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            # Commit with date in message
+            CURRENT_DATE=$(date '+%Y-%m-%d')
+            git commit -m "🔄 Auto-update data and models from workflow run on ${CURRENT_DATE}"
+            
+            # Push to repository
+            git remote set-url origin https://x-access-token:${{ secrets.Stock }}@github.com/${{ github.repository }}
+            git push origin HEAD:${{ github.ref_name }}
+            echo "✅ Successfully pushed changes to GitHub"
+          fi
