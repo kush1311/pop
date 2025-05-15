@@ -317,13 +317,32 @@ def run_all_predictions():
                         
                     print(f"🔧 Creating sample model for {symbol}...")
                     
-                    # Convert timestamp column to string to avoid errors
-                    for col in symbol_data.columns:
-                        if 'Date' in col or 'Timestamp' in col:
-                            symbol_data[col] = symbol_data[col].astype(str)
+                    # Create a clean copy with numeric data only
+                    clean_data = symbol_data.copy()
+                    
+                    # Handle all date/time columns - convert to numeric
+                    for col in clean_data.columns:
+                        # If column has timestamp values, drop or convert to numeric
+                        if pd.api.types.is_datetime64_any_dtype(clean_data[col]) or 'date' in col.lower() or 'time' in col.lower():
+                            # Option 1: Drop the column (simplest approach)
+                            clean_data = clean_data.drop(columns=[col])
+                        # Ensure all remaining data is numeric
+                        elif not pd.api.types.is_numeric_dtype(clean_data[col]):
+                            if col != 'Symbol':  # Keep Symbol column as is
+                                try:
+                                    clean_data[col] = pd.to_numeric(clean_data[col], errors='coerce')
+                                except:
+                                    clean_data = clean_data.drop(columns=[col])
+                    
+                    # Make sure we keep Symbol column for identification
+                    if 'Symbol' not in clean_data.columns:
+                        clean_data['Symbol'] = symbol
+                        
+                    # Fill any NaN values that might have been created
+                    clean_data = clean_data.fillna(0)
                     
                     # Create a simple environment
-                    env = DummyVecEnv([lambda: DynamicTradingEnv(symbol_data, symbol_data, None, None, None)])
+                    env = DummyVecEnv([lambda: DynamicTradingEnv(clean_data, clean_data, None, None, None)])
                     env = VecNormalize(env, training=True, norm_obs=True, norm_reward=True)
                     
                     # Create a simple PPO model
@@ -344,6 +363,8 @@ def run_all_predictions():
                     symbols.append(symbol)
                 except Exception as e:
                     print(f"❌ Error creating sample model for {symbol}: {e}")
+                    import traceback
+                    traceback.print_exc()
             
             # Update symbols list after creation
             symbols = list(set(symbols))  # Remove duplicates
