@@ -63,6 +63,20 @@ jobs:
           else
             echo "No model directory found after creation"
           fi
+        
+      - name: 📰 Fetch news sentiment data
+        run: |
+          echo "Fetching latest news sentiment data..."
+          python -c "from newz import get_news; news_df = get_news(); print(f'Fetched {len(news_df)} news items')"
+          
+          # If we have a sentiment file, check its contents
+          if [ -f "Labeled_News_Sentiment_Data.csv" ]; then
+            echo "News data file exists. Sample content:"
+            head -n 5 Labeled_News_Sentiment_Data.csv
+          else
+            echo "Creating initial news sentiment file"
+            python -c "from newz import get_news; news_df = get_news(); news_df.to_csv('Labeled_News_Sentiment_Data.csv', index=False)"
+          fi
  
       - name: 🚀 Run daily PPO update
         run: |
@@ -161,4 +175,11 @@ jobs:
         with:
           name: daily-predictions
           path: daily_predictions/*.csv
+          if-no-files-found: warn
+          
+      - name: 📤 Upload News Sentiment Data
+        uses: actions/upload-artifact@v4
+        with:
+          name: news-sentiment-data
+          path: Labeled_News_Sentiment_Data.csv
           if-no-files-found: warn

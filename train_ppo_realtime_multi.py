@@ -20,6 +20,7 @@ class DynamicTradingEnv(gym.Env):
     def __init__(self, df_daily, df_pcr, df_sentiment, df_quarterly, xgb_model, initial_balance=100000, dummy=False):
         super(DynamicTradingEnv, self).__init__()
         self.df = df_daily.copy().reset_index(drop=True)
+        self.df_sentiment = df_sentiment.copy() if df_sentiment is not None else pd.DataFrame()
         self.initial_balance = initial_balance
         self.balance = initial_balance
         self.current_step = 0
@@ -30,7 +31,24 @@ class DynamicTradingEnv(gym.Env):
 
     def _get_obs(self):
         row = self.df.iloc[self.current_step]
-        obs = row.drop(["Symbol", "Datetime"], errors="ignore").values
+        # Basic features from the dataframe
+        obs = row.drop(["Symbol", "Datetime", "Date"], errors="ignore").values
+        
+        # Add sentiment data for current date if available
+        if not self.df_sentiment.empty and 'Date' in self.df.columns:
+            current_date = self.df.iloc[self.current_step]['Date']
+            if isinstance(current_date, str):
+                current_date = pd.to_datetime(current_date)
+                
+            # Find closest sentiment data
+            if 'DATE' in self.df_sentiment.columns:
+                sent_row = self.df_sentiment[self.df_sentiment['DATE'] <= current_date].sort_values('DATE').tail(1)
+                if not sent_row.empty and 'sentiment_score' in self.df_sentiment.columns:
+                    sentiment_value = sent_row['sentiment_score'].values[0]
+                    obs = np.append(obs, sentiment_value)
+                else:
+                    obs = np.append(obs, 0)  # Default neutral sentiment
+        
         return np.nan_to_num(obs, nan=0.0)
 
     def reset(self):
@@ -276,10 +294,52 @@ def run_retraining():
             
         print("📰 Fetching news sentiment using newz.py...")
         try:
+            # Get latest news sentiment
             news_df = get_news()
+            
+            # Prepare news data for model training
+            if not news_df.empty and 'published' in news_df.columns:
+                # Convert to proper format
+                news_df['DATE'] = pd.to_datetime(news_df['published'])
+                
+                # Check if we have historical sentiment data we should combine with
+                sentiment_path = os.path.join(BASE_DIR, "Labeled_News_Sentiment_Data.csv")
+                if os.path.exists(sentiment_path):
+                    try:
+                        historical_sentiment = pd.read_csv(sentiment_path)
+                        historical_sentiment['DATE'] = pd.to_datetime(historical_sentiment['DATE'])
+                        
+                        # Combine with new data, keeping latest values when duplicates exist
+                        combined_news = pd.concat([
+                            historical_sentiment, 
+                            news_df[['DATE', 'sentiment_score']]
+                        ])
+                        
+                        # Remove duplicates by date, keeping newest data
+                        news_df = combined_news.drop_duplicates(subset=['DATE'], keep='last')
+                        
+                        print(f"✅ Combined {len(historical_sentiment)} historical and {len(news_df) - len(historical_sentiment)} new sentiment records")
+                    except Exception as e:
+                        print(f"⚠️ Error combining with historical sentiment: {e}")
+                        # Keep only the newly fetched news
+                        news_df = news_df[['DATE', 'sentiment_score']]
+                else:
+                    # No historical data, just use what we fetched
+                    news_df = news_df[['DATE', 'sentiment_score']]
+                    
+                # Save updated sentiment data for future use
+                try:
+                    news_df.to_csv(sentiment_path, index=False)
+                    print(f"✅ Saved {len(news_df)} sentiment records to {sentiment_path}")
+                except Exception as e:
+                    print(f"⚠️ Error saving sentiment data: {e}")
+            else:
+                print("⚠️ No news data available")
+                # Create empty DataFrame with correct structure
+                news_df = pd.DataFrame(columns=['DATE', 'sentiment_score'])
         except Exception as e:
             print(f"⚠️ Error fetching news, using empty dataframe: {e}")
-            news_df = pd.DataFrame()
+            news_df = pd.DataFrame(columns=['DATE', 'sentiment_score'])
 
         # Try to update the Excel file with new data
         try:
@@ -321,14 +381,21 @@ def run_retraining():
 
             try:
                 model = PPO.load(model_path)
-                env = DummyVecEnv([lambda: DynamicTradingEnv(data, data, news_df, None, None)])
+                # Create environment with news data included
+                env = DummyVecEnv([lambda: DynamicTradingEnv(
+                    df_daily=data, 
+                    df_pcr=data,  # Using same data for PCR, could be separated
+                    df_sentiment=news_df,  # Pass the news data
+                    df_quarterly=None, 
+                    xgb_model=None
+                )])
                 env = VecNormalize(env, training=True, norm_obs=True, norm_reward=True)
                 model.set_env(env)
                 model.learn(total_timesteps=5000)
                 model.save(model_path)
                 env.save(env_path)
-                print(f"✅ Retrained model for {ticker}")
-                report.append({"Ticker": ticker, "Status": "Updated", "Time": str(datetime.now())})
+                print(f"✅ Retrained model for {ticker} with news data")
+                report.append({"Ticker": ticker, "Status": "Updated with news data", "Time": str(datetime.now())})
             except Exception as e:
                 print(f"❌ {ticker} retrain error: {e}")
                 report.append({"Ticker": ticker, "Status": f"Error: {str(e)}", "Time": str(datetime.now())})

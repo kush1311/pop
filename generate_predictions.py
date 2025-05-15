@@ -19,6 +19,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 # Add parent directory to path to import modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from train_ppo_realtime_multi import DynamicTradingEnv, fetch_live_features, calculate_features_simple
+from newz import get_news  # Import news fetching function
 
 # Constants
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -53,7 +54,7 @@ PREDICTIONS_DIR = os.path.join(BASE_DIR, "daily_predictions")
 os.makedirs(PREDICTIONS_DIR, exist_ok=True)
 FORECAST_DAYS = 90  # 3 months prediction
 
-def prepare_forecast_data(df, days=90, lookback_days=20):
+def prepare_forecast_data(df, days=90, lookback_days=20, news_df=None):
     """
     Prepare data for forecasting by extending the dataframe with future dates
     Uses the last lookback_days to create patterns for decision making
@@ -85,50 +86,37 @@ def prepare_forecast_data(df, days=90, lookback_days=20):
     else:
         print("⚠️ No Symbol column found in dataframe")
         future_df['Symbol'] = 'UNKNOWN'
+        
+    # Copy all the feature columns from the latest data
+    # First get all columns except Date and Symbol
+    feature_cols = [col for col in df.columns if col not in ['Date', 'Symbol']]
+    latest_features = df.iloc[-1][feature_cols].to_dict()
     
-    # Add features based on historical patterns
-    # For price data, we'll use a simple model that continues the recent trend
-    if len(historical_window) >= 2:
-        # Calculate average daily change over the lookback period
-        avg_daily_change = (historical_window['Close'].iloc[-1] - historical_window['Close'].iloc[0]) / (len(historical_window) - 1)
-        
-        # Initialize with the last known price
-        last_price = historical_window['Close'].iloc[-1]
-        
-        # Generate future prices
-        future_prices = []
-        for i in range(days):
-            # Add some randomness based on historical volatility
-            volatility = historical_window['Close'].pct_change().std()
-            noise = np.random.normal(0, volatility * last_price) if not pd.isna(volatility) else 0
+    # Apply these features to all future rows
+    for col, value in latest_features.items():
+        future_df[col] = value
+    
+    # Combine the historical and future data
+    combined_df = pd.concat([historical_window, future_df], ignore_index=True)
+    
+    # If we have news data, include it
+    if news_df is not None and not news_df.empty:
+        # Add the latest sentiment values to the future data
+        if 'DATE' in news_df.columns and 'sentiment_score' in news_df.columns:
+            # Get the latest sentiment value
+            latest_sentiment = news_df.sort_values('DATE').tail(1)['sentiment_score'].values[0]
             
-            # Calculate new price
-            new_price = last_price + avg_daily_change + noise
-            future_prices.append(max(0.1, new_price))  # Ensure price doesn't go negative
-            last_price = new_price
-    else:
-        # Not enough data for trend, just use last price
-        future_prices = [df['Close'].iloc[-1]] * days
+            # Add sentiment to future data
+            if 'sentiment_score' not in combined_df.columns:
+                combined_df['sentiment_score'] = 0
+                
+            # Set all future rows to the latest sentiment value
+            future_indices = combined_df.index[combined_df['Date'] > latest_date]
+            combined_df.loc[future_indices, 'sentiment_score'] = latest_sentiment
     
-    # Add the forecasted prices
-    future_df['Close'] = future_prices
-    
-    # Generate other price columns based on the Close price
-    future_df['Open'] = future_df['Close'] * (1 + np.random.normal(0, 0.005, size=days))
-    future_df['High'] = future_df['Close'] * (1 + abs(np.random.normal(0, 0.01, size=days)))
-    future_df['Low'] = future_df['Close'] * (1 - abs(np.random.normal(0, 0.01, size=days)))
-    
-    # Copy over other indicators from historical data
-    for col in df.columns:
-        if col not in ['Date', 'Symbol', 'Open', 'High', 'Low', 'Close', 'Volume']:
-            future_df[col] = historical_window[col].iloc[-1]
-    
-    # Ensure Date is datetime type
-    future_df['Date'] = pd.to_datetime(future_df['Date'])
-    
-    return future_df
+    return combined_df
 
-def predict_stock(symbol, real_data, models_dir=MODEL_DIR, env_dir=ENV_DIR):
+def predict_stock(symbol, real_data, news_df=None, models_dir=MODEL_DIR, env_dir=ENV_DIR):
     """Generate predictions for a single stock"""
     model_path = os.path.join(models_dir, f"ppo_rl_xgb_{symbol.lower()}.zip")
     env_path = os.path.join(env_dir, f"vecnormalize_{symbol.lower()}.pkl")
@@ -155,8 +143,8 @@ def predict_stock(symbol, real_data, models_dir=MODEL_DIR, env_dir=ENV_DIR):
             
         print(f"📊 Using last {len(stock_data)} days of data for {symbol} to predict next {FORECAST_DAYS} days")
             
-        # Prepare forecast data with 20-day lookback pattern
-        future_data = prepare_forecast_data(stock_data, days=FORECAST_DAYS, lookback_days=20)
+        # Prepare forecast data with 20-day lookback pattern and news data
+        future_data = prepare_forecast_data(stock_data, days=FORECAST_DAYS, lookback_days=20, news_df=news_df)
         if future_data is None:
             print(f"⚠️ Failed to create forecast data for {symbol}")
             return None
@@ -164,8 +152,14 @@ def predict_stock(symbol, real_data, models_dir=MODEL_DIR, env_dir=ENV_DIR):
         # Load model
         model = PPO.load(model_path)
         
-        # Create environment
-        env = DummyVecEnv([lambda: DynamicTradingEnv(future_data, future_data, None, None, None)])
+        # Create environment with news data
+        env = DummyVecEnv([lambda: DynamicTradingEnv(
+            df_daily=future_data, 
+            df_pcr=future_data, 
+            df_sentiment=news_df, 
+            df_quarterly=None, 
+            xgb_model=None
+        )])
         env = VecNormalize.load(env_path, env)
         env.training = False  # Disable training mode
         env.norm_reward = False  # Disable reward normalization
@@ -209,25 +203,61 @@ def predict_stock(symbol, real_data, models_dir=MODEL_DIR, env_dir=ENV_DIR):
 
 def run_all_predictions():
     """Generate predictions for all stocks"""
-    print(f"\n{'='*80}\n📈 GENERATING PREDICTIONS FOR NEXT {FORECAST_DAYS} DAYS\n{'='*80}")
+    print(f"\n{'='*80}\n📊 Generating Stock Predictions\n{'='*80}")
     
-    # Get current date for filename
-    today = date.today().strftime('%Y%m%d')
-    output_file = os.path.join(PREDICTIONS_DIR, f"predictions_{today}.csv")
+    # Get the date for today
+    today = date.today()
+    today_str = today.strftime('%Y-%m-%d')
     
-    # Check if predictions were already generated today
-    if os.path.exists(output_file):
-        print(f"⚠️ Predictions for today already exist at {output_file}")
-        print("📊 Loading existing predictions...")
-        return pd.read_csv(output_file)
+    # Create predictions directory if it doesn't exist
+    os.makedirs(PREDICTIONS_DIR, exist_ok=True)
     
-    # Fetch latest data
-    print("📊 Fetching latest market data...")
-    real_data = fetch_live_features()
-    
+    # Get real data
+    print("📈 Fetching real-time market data...")
+    real_data = None
+    try:
+        from train_ppo_realtime_multi import fetch_live_features
+        real_data = fetch_live_features()
+    except Exception as e:
+        print(f"❌ Error fetching live data: {e}")
+        
     if real_data is None or real_data.empty:
-        print("❌ Failed to fetch market data")
-        return None
+        print("⚠️ No live data available, checking for saved data...")
+        try:
+            csv_path = os.path.join(BASE_DIR, "live_nifty50_features.csv")
+            if os.path.exists(csv_path):
+                real_data = pd.read_csv(csv_path)
+                print(f"✅ Loaded saved data from {csv_path}")
+            else:
+                print(f"❌ No saved data found at {csv_path}")
+                return
+        except Exception as e:
+            print(f"❌ Error loading saved data: {e}")
+            return
+    
+    # Get news data
+    print("📰 Fetching news sentiment...")
+    news_df = None
+    try:
+        news_df = get_news()
+        if news_df is not None and not news_df.empty:
+            print(f"✅ Fetched {len(news_df)} news items")
+            
+            # Format dates properly
+            if 'published' in news_df.columns:
+                news_df['DATE'] = pd.to_datetime(news_df['published'])
+        else:
+            print("⚠️ No news data available")
+            
+            # Try to load historical sentiment if news fetch failed
+            if news_df is None or news_df.empty:
+                sentiment_path = os.path.join(BASE_DIR, "Labeled_News_Sentiment_Data.csv")
+                if os.path.exists(sentiment_path):
+                    news_df = pd.read_csv(sentiment_path)
+                    print(f"✅ Using historical sentiment data ({len(news_df)} records)")
+                    news_df['DATE'] = pd.to_datetime(news_df['DATE'])
+    except Exception as e:
+        print(f"⚠️ Error fetching news: {e}")
     
     # Create environment directory if it doesn't exist
     os.makedirs(ENV_DIR, exist_ok=True)
@@ -333,32 +363,35 @@ def run_all_predictions():
         
         # Create demo dataframe
         combined_predictions = pd.DataFrame(demo_predictions)
-        combined_predictions.to_csv(output_file, index=False)
+        combined_predictions.to_csv(os.path.join(PREDICTIONS_DIR, f"predictions_{today_str}.csv"), index=False)
         print(f"✅ Created demonstration predictions file with {len(combined_predictions)} rows")
         
         return combined_predictions
     
     print(f"🔍 Found {len(symbols)} models: {', '.join(symbols)}")
     
-    # Generate predictions for each stock
+    # Run predictions for each model
+    print(f"\n🔮 Generating predictions for {len(symbols)} stocks...")
     all_predictions = []
     
     for symbol in symbols:
-        print(f"\n🔮 Generating predictions for {symbol}...")
-        stock_predictions = predict_stock(symbol, real_data)
-        if stock_predictions is not None:
-            all_predictions.append(stock_predictions)
-    
-    if not all_predictions:
-        print("❌ No predictions generated")
-        return None
+        print(f"\n➡️ Predicting for {symbol}...")
+        try:
+            stock_predictions = predict_stock(symbol, real_data, news_df)
+            if stock_predictions is not None:
+                all_predictions.extend(stock_predictions)
+                print(f"✅ Prediction complete for {symbol}")
+            else:
+                print(f"⚠️ Failed to generate predictions for {symbol}")
+        except Exception as e:
+            print(f"❌ Error predicting {symbol}: {e}")
     
     # Combine all predictions
     combined_predictions = pd.concat(all_predictions, ignore_index=True)
     
     # Save predictions
-    combined_predictions.to_csv(output_file, index=False)
-    print(f"\n✅ Saved {len(combined_predictions)} predictions to {output_file}")
+    combined_predictions.to_csv(os.path.join(PREDICTIONS_DIR, f"predictions_{today_str}.csv"), index=False)
+    print(f"\n✅ Saved {len(combined_predictions)} predictions to {os.path.join(PREDICTIONS_DIR, f'predictions_{today_str}.csv')}")
     
     # Generate summary
     summary = combined_predictions.groupby(['Symbol', 'Predicted_Action']).size().unstack().fillna(0)
@@ -377,7 +410,7 @@ def run_all_predictions():
         print(f"{stock}: {score:.2f} - {recommendation}")
     
     # Create a summary file with recommendations
-    summary_file = os.path.join(PREDICTIONS_DIR, f"recommendations_{today}.csv")
+    summary_file = os.path.join(PREDICTIONS_DIR, f"recommendations_{today_str}.csv")
     pd.DataFrame({
         'Symbol': recommendations.index,
         'Score': recommendations.values,

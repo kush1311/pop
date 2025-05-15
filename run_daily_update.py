@@ -41,8 +41,56 @@ def run_update():
         import data
         print("✅ Data update complete")
         
+        # NEW STEP: Fetch news sentiment data
+        print("\n🔄 STEP 1.5: Fetching news sentiment data")
+        news_df = None
+        try:
+            from newz import get_news
+            import pandas as pd
+            news_df = get_news()
+            print(f"✅ Fetched {len(news_df)} news items")
+            
+            # Save/update the news data for future use
+            sentiment_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Labeled_News_Sentiment_Data.csv")
+            
+            # Check if we have historical data to merge with
+            if os.path.exists(sentiment_path):
+                try:
+                    historical_sentiment = pd.read_csv(sentiment_path)
+                    print(f"📊 Found historical sentiment data with {len(historical_sentiment)} records")
+                    
+                    # Convert dates to datetime for proper comparison
+                    historical_sentiment['DATE'] = pd.to_datetime(historical_sentiment['DATE'])
+                    news_df['DATE'] = pd.to_datetime(news_df['published'])
+                    
+                    # Combine historical and new data
+                    combined_df = pd.concat([
+                        historical_sentiment, 
+                        news_df[['DATE', 'sentiment_score']]
+                    ])
+                    
+                    # Remove duplicates by date, keeping newest data
+                    combined_df = combined_df.drop_duplicates(subset=['DATE'], keep='last')
+                    
+                    # Save combined data
+                    combined_df.to_csv(sentiment_path, index=False)
+                    print(f"✅ Updated sentiment data file with {len(combined_df)} total records")
+                except Exception as e:
+                    print(f"⚠️ Error merging with historical sentiment: {e}")
+                    # Save just the new data if merging fails
+                    news_df[['DATE', 'sentiment_score']].to_csv(sentiment_path, index=False)
+            else:
+                # No historical data exists, create new file
+                news_df['DATE'] = pd.to_datetime(news_df['published'])
+                news_df[['DATE', 'sentiment_score']].to_csv(sentiment_path, index=False)
+                print(f"✅ Created new sentiment data file with {len(news_df)} records")
+                
+        except Exception as e:
+            print(f"⚠️ Error fetching news data: {e}")
+            print("⚠️ Will continue with existing news data if available")
+        
         # Step 2: Run PPO retraining
-        print("\n🔄 STEP 2: Running PPO retraining")
+        print("\n🔄 STEP 2: Running PPO retraining with news data")
         from train_ppo_realtime_multi import run_retraining
         run_retraining()
         print("✅ Model retraining complete")
