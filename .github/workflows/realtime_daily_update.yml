@@ -1,25 +1,25 @@
 name: Daily PPO Update
- 
+
 on:
   schedule:
     - cron: "30 10 * * 1-5"  # ⏰ Runs at 10:30 AM UTC = 4:00 PM IST (Mon–Fri)
   workflow_dispatch:
- 
+
 jobs:
   retrain:
     runs-on: ubuntu-latest
- 
+
     env:
       NEWSDATA_API_KEY: ${{ secrets.NEWSDATA_API_KEY }}
       FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
       GNEWS_API_KEY: ${{ secrets.GNEWS_API_KEY }}
- 
+
     steps:
       - name: 📅 Checkout repo
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Fetch all history and tags
-          lfs: true       # Enable Git LFS to fetch large model files
+          fetch-depth: 0
+          lfs: true
 
       - name: 📄 List repository contents to debug
         run: |
@@ -29,17 +29,17 @@ jobs:
           ls -la saved_models_with_xgb || echo "Directory not found"
           echo "=== Checking saved_envs directory ==="
           ls -la saved_envs || echo "Directory not found"
- 
+
       - name: 🐍 Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
- 
+
       - name: 📦 Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      
+
       - name: 🔧 Create required directories
         run: |
           mkdir -p saved_models_with_xgb
@@ -48,79 +48,66 @@ jobs:
           mkdir -p daily_predictions
           mkdir -p daily_reports/visualizations
           echo "Created required directories for model storage and reports"
-          ls -la  # List directories to confirm creation
-          
+          ls -la
+
       - name: 📦 Copy model files if needed
         run: |
           if [ -d "$GITHUB_WORKSPACE/pop/saved_models_with_xgb" ]; then
             echo "Copying models from pop/saved_models_with_xgb"
             cp -r $GITHUB_WORKSPACE/pop/saved_models_with_xgb/* saved_models_with_xgb/
           fi
-          
+
           if [ -d "$GITHUB_WORKSPACE/saved_models_with_xgb" ]; then
             echo "Listing found model files:"
             ls -la saved_models_with_xgb/
           else
             echo "No model directory found after creation"
           fi
- 
+
       - name: 🚀 Run daily PPO update
         run: |
           python run_daily_update.py
-          
-          # Check if predictions were generated
           if [ -d "daily_predictions" ]; then
             echo "Checking predictions directory:"
             ls -la daily_predictions/
           fi
- 
+
       - name: 🔮 Generate predictions
         run: |
-          # First check if we have any models
           echo "Model files available:"
           ls -la saved_models_with_xgb/ || echo "No models directory found"
-          
-          # Run prediction script with error handling
           python -u generate_predictions.py || echo "⚠️ Prediction generation failed"
           echo "--- Generated prediction files ---"
           ls -lh daily_predictions/
-          
+
       - name: 📈 Generate market reports
         run: |
-          # Ensure directories exist
           mkdir -p daily_reports/visualizations
-          
-          # Debug: Check predictions exist
           echo "Available prediction files:"
           ls -la daily_predictions/
-          
-          # Create market reports with verbose output
           python -u create_report.py || echo "⚠️ Report generation failed"
-          
           echo "--- Generated report files ---"
           ls -lRh daily_reports/
-          
-          # Debug: Check report contents
           echo "Report directory structure:"
           find daily_reports -type f
- 
+
       - name: 📂 List output files
         run: |
           echo "--- Files in workspace ---"
           ls -lRh
- 
+
       - name: 📤 Upload OHLCV as artifact
         uses: actions/upload-artifact@v4
         with:
           name: live-ohlcv-data
           path: live_nifty50_features.csv
- 
+
       - name: 📤 Upload Daily Summary
         uses: actions/upload-artifact@v4
         with:
           name: daily-summary
           path: daily_nifty50_summary.csv
- 
+
       - name: 📤 Upload Daily Report CSV
         uses: actions/upload-artifact@v4
         with:
@@ -129,7 +116,7 @@ jobs:
             daily_reports/*.csv
             daily_reports/**/*.csv
           if-no-files-found: warn
-      
+
       - name: 📤 Upload Market Report Markdown
         uses: actions/upload-artifact@v4
         with:
@@ -138,7 +125,7 @@ jobs:
             daily_reports/*.md
             daily_reports/**/*.md
           if-no-files-found: warn
-          
+
       - name: 📤 Upload Report Visualizations
         uses: actions/upload-artifact@v4
         with:
@@ -148,17 +135,27 @@ jobs:
             daily_reports/**/*.png
             daily_reports/visualizations/*.png
           if-no-files-found: warn
-      
+
       - name: 📤 Upload Excel file (if updated)
         uses: actions/upload-artifact@v4
         with:
           name: nifty50-processed-features
           path: nifty50_processed_features.xlsx
           if-no-files-found: ignore
-          
+
       - name: 📤 Upload Predictions
         uses: actions/upload-artifact@v4
         with:
           name: daily-predictions
           path: daily_predictions/*.csv
           if-no-files-found: warn
+
+      - name: 📝 Commit and push updated files to repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add *.csv daily_predictions/*.csv daily_reports/*.csv || echo "Nothing to add"
+          git commit -m "🔄 Auto-update CSV reports from workflow" || echo "No changes to commit"
+          git push origin HEAD:${{ github.ref_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
