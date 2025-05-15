@@ -47,48 +47,32 @@ jobs:
           mkdir -p daily_reports
           mkdir -p daily_predictions
           mkdir -p daily_reports/visualizations
-          echo "Created required directories for model storage and reports"
           ls -la
 
       - name: 📦 Copy model files if needed
         run: |
           if [ -d "$GITHUB_WORKSPACE/pop/saved_models_with_xgb" ]; then
-            echo "Copying models from pop/saved_models_with_xgb"
             cp -r $GITHUB_WORKSPACE/pop/saved_models_with_xgb/* saved_models_with_xgb/
           fi
-
-          if [ -d "$GITHUB_WORKSPACE/saved_models_with_xgb" ]; then
-            echo "Listing found model files:"
-            ls -la saved_models_with_xgb/
-          else
-            echo "No model directory found after creation"
-          fi
+          ls -la saved_models_with_xgb/ || echo "No model directory found"
 
       - name: 🚀 Run daily PPO update
         run: |
           python run_daily_update.py
-          if [ -d "daily_predictions" ]; then
-            echo "Checking predictions directory:"
-            ls -la daily_predictions/
-          fi
+          ls -la daily_predictions/ || echo "No predictions found"
 
       - name: 🔮 Generate predictions
         run: |
-          echo "Model files available:"
-          ls -la saved_models_with_xgb/ || echo "No models directory found"
+          ls -la saved_models_with_xgb/ || echo "No models found"
           python -u generate_predictions.py || echo "⚠️ Prediction generation failed"
-          echo "--- Generated prediction files ---"
           ls -lh daily_predictions/
 
       - name: 📈 Generate market reports
         run: |
           mkdir -p daily_reports/visualizations
-          echo "Available prediction files:"
           ls -la daily_predictions/
           python -u create_report.py || echo "⚠️ Report generation failed"
-          echo "--- Generated report files ---"
           ls -lRh daily_reports/
-          echo "Report directory structure:"
           find daily_reports -type f
 
       - name: 📂 List output files
@@ -152,10 +136,11 @@ jobs:
 
       - name: 📝 Commit and push updated files to repo
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
           git add *.csv daily_predictions/*.csv daily_reports/*.csv || echo "Nothing to add"
           git commit -m "🔄 Auto-update CSV reports from workflow" || echo "No changes to commit"
+          
+          git remote set-url origin https://x-access-token:${{ secrets.Stock }}@github.com/${{ github.repository }}
           git push origin HEAD:${{ github.ref_name }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
