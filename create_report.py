@@ -395,6 +395,18 @@ def generate_report():
     if recommendations_df is None and predictions_df is not None:
         print("⚠️ No recommendation summary file found. Creating one from predictions...")
         try:
+            # Ensure we have the necessary columns in the predictions DataFrame
+            if 'Day' not in predictions_df.columns:
+                # Create a Day column based on Date
+                try:
+                    predictions_df['Date'] = pd.to_datetime(predictions_df['Date'])
+                    min_date = predictions_df['Date'].min()
+                    predictions_df['Day'] = (predictions_df['Date'] - min_date).dt.days
+                except Exception as e:
+                    print(f"⚠️ Could not create Day from Date column: {e}")
+                    # Create a sequential Day column if date conversion fails
+                    predictions_df['Day'] = predictions_df.groupby('Symbol').cumcount()
+            
             # Create a basic recommendation file from the predictions
             symbols = predictions_df['Symbol'].unique()
             recommendations = []
@@ -407,10 +419,16 @@ def generate_report():
                 sell_count = len(symbol_preds[symbol_preds['Predicted_Action'] == 'SELL'])
                 hold_count = len(symbol_preds[symbol_preds['Predicted_Action'] == 'HOLD'])
                 
-                # Calculate time-based scores
-                short_term_preds = symbol_preds[symbol_preds['Day'] <= 30]
-                medium_term_preds = symbol_preds[(symbol_preds['Day'] > 30) & (symbol_preds['Day'] <= 60)]
-                long_term_preds = symbol_preds[symbol_preds['Day'] > 60]
+                # Ensure day values are numeric
+                symbol_preds['Day'] = pd.to_numeric(symbol_preds['Day'], errors='coerce').fillna(0)
+                
+                # Calculate time-based scores - using day ranges
+                day_max = symbol_preds['Day'].max()
+                day_third = day_max / 3
+                
+                short_term_preds = symbol_preds[symbol_preds['Day'] <= day_third]
+                medium_term_preds = symbol_preds[(symbol_preds['Day'] > day_third) & (symbol_preds['Day'] <= 2*day_third)]
+                long_term_preds = symbol_preds[symbol_preds['Day'] > 2*day_third]
                 
                 # Score calculation: (buy_count - sell_count) / total_count
                 total_count = len(symbol_preds)
