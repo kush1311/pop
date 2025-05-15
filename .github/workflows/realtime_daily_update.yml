@@ -190,8 +190,7 @@ jobs:
             CURRENT_DATE=$(date '+%Y-%m-%d')
             git commit -m "🔄 Auto-update data and models from workflow run on ${CURRENT_DATE}"
             
-            # Push to repository
-            git remote set-url origin https://x-access-token:${{ secrets.Stock }}@github.com/${{ github.repository }}
-            git push origin HEAD:${{ github.ref_name }}
+            # Push to repository using GitHub token
+            git push "https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" HEAD:${{ github.ref_name }}
             echo "✅ Successfully pushed changes to GitHub"
           fi
