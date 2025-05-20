@@ -1,124 +1,81 @@
-# Stock Prediction Model with Reinforcement Learning
+# PPO Reinforcement Learning for Nifty50 Trading
 
-This project implements a reinforcement learning-based stock prediction model for NIFTY 50 stocks, focusing on RELIANCE as the initial company. The model uses technical indicators, price data, sentiment analysis, and options data to predict whether to BUY, SELL, or HOLD a stock.
+This repository contains a Proximal Policy Optimization (PPO) Reinforcement Learning system for stock trading. It automatically fetches real-time market data, news sentiment, and retrains models daily using GitHub Actions.
 
-## Features
+## 🤖 System Overview
 
-- Reinforcement learning (PPO algorithm) for trading decisions
-- Technical indicators (RSI, MACD, Bollinger Bands, Golden/Death Cross, etc.)
-- Sentiment analysis from news data
-- Options data analysis (Put-Call Ratio)
-- Quarterly financial data integration
-- Interactive visualizations
-- Multi-horizon predictions (15, 30, 45, 60, 90 days)
-- Stop-loss recommendations based on volatility and support/resistance levels
-- Confidence-backed predictions with detailed rationale
-- Realistic trading simulation with slippage and transaction costs
-- Automated stop-loss and take-profit mechanisms
+The system performs daily continuous learning through these components:
 
-## Project Structure
+1. **Data Collection**:
+   - Market OHLCV data collection via `data.py`
+   - News sentiment analysis via `newz.py`
+   - PCR (Put-Call Ratio) data from NSE
 
-- `stock_env.py`: Custom Gymnasium environment for stock trading simulation
-- `training.py`: Main script for data loading, feature engineering, and model training
-- `run_model.py`: Script to run a trained model and get predictions
-- `visualizations/`: Directory containing generated visualizations
-- `models/`: Directory for saved models
-- `logs/`: Training logs for TensorBoard
-- `prediction_reports/`: Directory for saved prediction reports
+2. **Model Training**:
+   - Daily retraining of PPO models
+   - Integration of sentiment data
+   - Excel storage of historical features
 
-## Data Files
+3. **Automation**:
+   - Daily updates via GitHub Actions (weekdays at 4:00 PM IST)
+   - Artifact storage of daily results
 
-The model uses the following data files:
-- `tech+rsi+price based features.xlsx`: Technical indicators and price data
-- `updated_Nifty50_PCR_Features_with_label.xlsx`: Put-Call Ratio data
-- `Nifty50_Quarterly_Features.xlsx`: Quarterly financial data
-- `Labeled_News_Sentiment_Data.csv`: News sentiment data
+## 📁 File Structure
 
-## Requirements
+- `train_ppo_realtime_multi.py` - Main PPO training module
+- `data.py` - OHLCV data collection and feature calculation
+- `newz.py` - Financial news sentiment analysis
+- `run_daily_update.py` - Pipeline orchestration script
+- `requirements.txt` - Python dependencies
+- `.github/workflows/realtime_daily_update.yml` - GitHub Actions workflow
 
-```
-pandas
-numpy
-matplotlib
-seaborn
-scikit-learn
-stable-baselines3
-gymnasium
-```
+## 🔄 Continuous Learning Process
 
-## Usage
+1. The GitHub Actions workflow triggers daily at 10:30 AM UTC (4:00 PM IST) on weekdays
+2. `run_daily_update.py` executes:
+   - Updates the Excel file with latest market data via `data.py`
+   - Runs PPO retraining with the new data via `train_ppo_realtime_multi.py`
+3. Trained models and artifacts are saved to the repository
 
-### Training a Model
+## 🛠️ Setup and Usage
 
-To train a new model:
+### Manual Execution
 
 ```bash
-python training.py
+# Install dependencies
+pip install -r requirements.txt
+
+# Run the daily update process
+python run_daily_update.py
 ```
 
-This will:
-1. Load and preprocess data
-2. Engineer features
-3. Train a reinforcement learning model
-4. Evaluate the model
-5. Make predictions
-6. Save visualizations
+### GitHub Actions
 
-### Running a Trained Model
+The system will run automatically via GitHub Actions. You can also trigger a manual run:
 
-To run a trained model and get predictions:
+1. Go to the "Actions" tab in your repository
+2. Select "Daily PPO Update" workflow
+3. Click "Run workflow"
 
-```bash
-python run_model.py --company RELIANCE --visualize --save_report
-```
+### Required Secrets
 
-Options:
-- `--company`: Company to predict (default: RELIANCE)
-- `--model_path`: Path to a specific model file (default: use latest model)
-- `--visualize`: Show visualizations
-- `--save_report`: Save prediction report to a text file
+The following GitHub Secrets should be configured:
+- `NEWSDATA_API_KEY`
+- `FINNHUB_API_KEY`
+- `GNEWS_API_KEY`
 
-## Visualizations
+## 📊 Outputs
 
-The model generates several visualizations:
-- Stock price with buy/sell markers and stop-loss/take-profit levels
-- Portfolio value over time with cash and asset breakdown
-- Performance metrics including drawdown and rolling returns
-- Action distribution and trading statistics
-- Prediction summary with target prices and expected returns
-- Technical indicators with RSI and MACD
+- `live_nifty50_features.csv` - Daily OHLCV data
+- `daily_nifty50_summary.csv` - Summary statistics
+- `nifty50_processed_features.xlsx` - Historical feature database
+- `daily_reports/*.csv` - Retraining logs
 
-## Model Logic
+## 📚 Dependencies
 
-The reinforcement learning agent:
-1. Observes market data and technical indicators
-2. Takes actions (BUY, SELL, HOLD)
-3. Receives rewards based on portfolio performance
-4. Implements automatic stop-loss and take-profit mechanisms
-5. Learns optimal trading strategy over time
-
-The final prediction includes:
-- Recommended action (BUY, SELL, HOLD)
-- Current price
-- Target prices for different time horizons
-- Expected returns for each horizon
-- Stop-loss recommendation
-- Confidence level
-- Detailed rationale for the recommendation
-- Volatility information
-
-## Extending to Other Stocks
-
-To use the model for other NIFTY 50 stocks, modify the `COMPANY` constant in `training.py` or use the `--company` flag with `run_model.py`.
-
-## Future Improvements
-
-- Hyperparameter optimization
-- Multi-stock portfolio management
-- Market regime detection
-- Integration with live trading APIs
-- Adaptive stop-loss strategies
-- Deep reinforcement learning models (A2C, TD3)
-- Ensemble methods combining multiple models
-- Incorporating macroeconomic indicators
-- Sector-specific models
+- stable-baselines3 - PPO algorithm implementation
+- gym - RL environment
+- pandas, numpy - Data manipulation
+- yfinance - Market data access
+- textblob - Sentiment analysis
+- ta - Technical indicators 
